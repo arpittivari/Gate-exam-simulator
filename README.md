@@ -1,4 +1,5 @@
 # GATE Exam Simulator
+Deploy test update
 
 This repository contains a React + Vite + Tailwind implementation of the GATE Exam Simulator.
 It includes:
