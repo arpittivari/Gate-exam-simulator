@@ -31,3 +31,6 @@ This repo includes a GitHub Actions workflow to build and deploy the `dist/` fol
 After you push this repository to GitHub (create a repository and push `main`), the action will run and publish the site on GitHub Pages.
 
 If you prefer Vercel / Netlify, you can connect the repository to those services instead.
+ # git add .
+ #   git commit -m "Upgrade to PDF Simulator"
+  #  git push -f origin main
