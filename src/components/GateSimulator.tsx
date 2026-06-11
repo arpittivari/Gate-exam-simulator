@@ -19,6 +19,7 @@ interface JsonQuestion {
   id: number | string;
   type: QuestionType;
   questionText: string;
+  section?: string;
   options?: string[];
   correctAnswer: string | string[];
   positiveMarks: number;
@@ -34,6 +35,7 @@ interface Question {
   id: string;
   text: string;
   topic?: string;
+  section?: string;
   type: QuestionType;
   options?: string[];
   correctAnswer: string | string[];
@@ -72,6 +74,9 @@ const EXAM_CONFIGS: Record<string, ExamConfig> = {
   SSC_CGL_TIER_2: { id: 'SSC_CGL_TIER_2', name: 'SSC CGL Tier 2', durationMinutes: 135, totalQuestions: 150, maxMarks: 450 },
   SSC_CHSL_TIER_1: { id: 'SSC_CHSL_TIER_1', name: 'SSC CHSL Tier 1', durationMinutes: 60, totalQuestions: 100, maxMarks: 200 },
   SSC_CHSL_TIER_2: { id: 'SSC_CHSL_TIER_2', name: 'SSC CHSL Tier 2', durationMinutes: 135, totalQuestions: 135, maxMarks: 405 },
+  JEE_MAINS: { id: 'JEE_MAINS', name: 'JEE Mains', durationMinutes: 180, totalQuestions: 90, maxMarks: 300 },
+  JEE_ADVANCED: { id: 'JEE_ADVANCED', name: 'JEE Advanced', durationMinutes: 180, totalQuestions: 54, maxMarks: 180 },
+  NEET: { id: 'NEET', name: 'NEET', durationMinutes: 200, totalQuestions: 200, maxMarks: 720 },
 };
 
 /* --- Sample Data --- */
@@ -180,12 +185,59 @@ export default function GateSimulator() {
 
   const updateStatus = (updates: Partial<QuestionStatus>) => setResponses(prev => ({ ...prev, [currentQ.id]: { ...prev[currentQ.id], ...updates } }));
 
+  const canAttemptQuestion = (q: Question, newVal: any) => {
+    const isClearing = !newVal || (Array.isArray(newVal) && newVal.length === 0);
+    if (isClearing) return true; // always allow clearing a response
+
+    // Check if the question is already attempted, if yes, user can update it
+    const s = responses[q.id];
+    const isCurrentlyAttempted = s && s.selectedOption != null && s.selectedOption !== '' && (!(Array.isArray(s.selectedOption)) || (s.selectedOption as string[]).length > 0);
+    if (isCurrentlyAttempted) return true;
+
+    // Count attempts in current section
+    let attemptsInSection = 0;
+    if (q.section) {
+      testData.questions.forEach(tq => {
+        if (tq.section === q.section && (tq.type === q.type || testData.examType === 'NEET')) {
+          const ts = responses[tq.id];
+          const isAtt = ts && ts.selectedOption != null && ts.selectedOption !== '' && (!(Array.isArray(ts.selectedOption)) || (ts.selectedOption as string[]).length > 0);
+          if (isAtt) attemptsInSection++;
+        }
+      });
+    }
+
+    if (testData.examType === 'JEE_MAINS' && q.type === 'NAT' && q.section) {
+      if (attemptsInSection >= 5) {
+        alert('You can only attempt 5 NAT questions per section in JEE Mains.');
+        return false;
+      }
+    }
+
+    if (testData.examType === 'NEET' && q.section?.includes('Section B')) {
+      if (attemptsInSection >= 10) {
+        alert('You can only attempt 10 questions in Section B of this subject.');
+        return false;
+      }
+    }
+
+    return true;
+  };
+
   const handleOptionSelect = (val: string) => {
-    if (currentQ.type === 'MCQ') updateStatus({ selectedOption: val });
+    if (currentQ.type === 'MCQ') {
+      if (canAttemptQuestion(currentQ, val)) {
+        updateStatus({ selectedOption: val });
+      }
+    }
     else if (currentQ.type === 'MSQ') {
       const cur = (currentStatus.selectedOption as string[]) || [];
-      if (cur.includes(val)) updateStatus({ selectedOption: cur.filter(x => x !== val) });
-      else updateStatus({ selectedOption: [...cur, val] });
+      if (cur.includes(val)) {
+        updateStatus({ selectedOption: cur.filter(x => x !== val) });
+      } else {
+        if (canAttemptQuestion(currentQ, [...cur, val])) {
+          updateStatus({ selectedOption: [...cur, val] });
+        }
+      }
     }
   };
 
@@ -244,7 +296,13 @@ export default function GateSimulator() {
       if (isAttempted) {
         attempted++;
         if (q.type === 'NAT') {
-          if (String(resp.selectedOption).trim() === String(q.correctAnswer).trim()) { isCorrect = true; marksEarned = q.marks; }
+          if (String(resp.selectedOption).trim() === String(q.correctAnswer).trim()) {
+            isCorrect = true;
+            marksEarned = q.marks;
+          } else {
+            marksEarned = -q.negativeMarks;
+            wrong++;
+          }
         } else if (q.type === 'MCQ') {
           if (resp.selectedOption === q.correctAnswer) {
             isCorrect = true;
@@ -254,14 +312,54 @@ export default function GateSimulator() {
             wrong++;
           }
         } else if (q.type === 'MSQ') {
-          const userArr = (resp.selectedOption as string[])?.sort().join(',') || '';
-          const correctArr = (q.correctAnswer as string[])?.sort().join(',') || '';
-          if (userArr === correctArr) { isCorrect = true; marksEarned = q.marks; }
+          const userArr = (resp.selectedOption as string[]) || [];
+          const correctArr = (q.correctAnswer as string[]) || [];
+
+          if (testData.examType === 'JEE_ADVANCED') {
+            // Partial Marking Logic
+            let hasIncorrect = false;
+            let correctSelectedCount = 0;
+            userArr.forEach(opt => {
+              if (correctArr.includes(opt)) {
+                correctSelectedCount++;
+              } else {
+                hasIncorrect = true;
+              }
+            });
+
+            if (hasIncorrect) {
+              marksEarned = -q.negativeMarks;
+              wrong++;
+            } else if (correctSelectedCount === correctArr.length && correctSelectedCount > 0) {
+              isCorrect = true;
+              marksEarned = q.marks;
+            } else if (correctSelectedCount > 0) {
+              // Partial correct
+              marksEarned = correctSelectedCount * 1;
+              // We won't mark it "isCorrect" strictly, but marks are awarded
+            } else {
+              // Should not happen if isAttempted is true, but just in case
+              marksEarned = 0;
+            }
+          } else {
+             // Standard marking for MSQ (no partial)
+            const userStr = userArr.slice().sort().join(',');
+            const correctStr = correctArr.slice().sort().join(',');
+            if (userStr === correctStr) {
+              isCorrect = true;
+              marksEarned = q.marks;
+            } else {
+               // MSQ doesn't typically have negative marking outside JEE Adv, but if it does:
+               marksEarned = -q.negativeMarks;
+               wrong++;
+            }
+          }
         }
-        if (isCorrect) {
-          correct++;
+
+        if (marksEarned > 0) {
+          if (isCorrect) correct++;
           positiveMarks += marksEarned;
-        } else {
+        } else if (marksEarned < 0) {
           negativeMarks += Math.abs(marksEarned);
         }
       }
@@ -356,6 +454,7 @@ export default function GateSimulator() {
                         id: String(q.id),
                         text: q.questionText,
                         topic: (q as any).topic,
+                        section: q.section,
                         type: q.type,
                         options: q.options,
                         correctAnswer: q.correctAnswer || (q as any).correctAnswers,
@@ -532,7 +631,7 @@ export default function GateSimulator() {
       <header className="bg-white px-4 py-2 flex justify-between items-center border-b shadow-sm z-10">
         <div className="font-bold text-lg text-gray-800">GATE Exam Simulator</div>
         <div className="flex items-center space-x-4">
-          {testData.examType === 'GATE' && (
+          {['GATE', 'JEE_ADVANCED'].includes(testData.examType) && (
             <button
               className="p-2 text-blue-600 hover:bg-blue-50 rounded transition flex items-center shadow-sm border border-blue-200"
               onClick={() => setIsCalculatorOpen(!isCalculatorOpen)}
@@ -593,7 +692,7 @@ export default function GateSimulator() {
       <div className="flex flex-1 overflow-hidden relative">
         <main className="flex-1 flex flex-col h-full overflow-hidden">
           <div className="bg-blue-600 text-white px-4 py-2 flex justify-between items-center shadow-md shrink-0">
-            <div className="font-semibold text-lg">Question {currentQIndex + 1}</div>
+            <div className="font-semibold text-lg">Question {currentQIndex + 1} {currentQ.section && `- ${currentQ.section}`}</div>
             <div className="flex items-center space-x-3">
               <div className="text-xs font-semibold bg-white/20 px-3 py-1 rounded-full border border-white/30">
                 Marks: {currentQ.marks} <span className="mx-1">|</span> Neg: <span className="text-red-200">-{currentQ.negativeMarks}</span>
@@ -613,7 +712,12 @@ export default function GateSimulator() {
                       className="border-2 border-gray-300 p-3 rounded w-full md:w-64 font-mono text-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition"
                       placeholder="0.00"
                       value={(currentStatus.selectedOption as string) || ''}
-                      onChange={(e) => updateStatus({ selectedOption: e.target.value })}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (canAttemptQuestion(currentQ, val)) {
+                          updateStatus({ selectedOption: val });
+                        }
+                      }}
                     />
                   </div>
                 ) : (
